@@ -7,7 +7,15 @@ Deno.serve((req) => {
     return new Response("Invalid invite link", { status: 400 });
   }
 
-  const deepLink = `treasury://invite?group=${groupId}&name=${encodeURIComponent(groupName)}`;
+  const ua = req.headers.get("user-agent") ?? "";
+  const isAndroid = /android/i.test(ua);
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const apkUrl = supabaseUrl
+    ? `${supabaseUrl}/storage/v1/object/public/releases/treasury-latest.apk`
+    : null;
+
+  const pageData = JSON.stringify({ groupName, isAndroid, apkUrl });
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -32,7 +40,8 @@ Deno.serve((req) => {
     }
     h1 { color: #C9A040; font-size: 28px; margin-bottom: 8px; }
     p { color: #6B6058; font-size: 16px; margin-bottom: 32px; }
-    a {
+    .btn {
+      display: inline-block;
       background: #C9A040;
       color: #0F0D0B;
       padding: 16px 32px;
@@ -40,24 +49,71 @@ Deno.serve((req) => {
       text-decoration: none;
       font-weight: 600;
       font-size: 16px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .btn-secondary {
+      background: transparent;
+      color: #C9A040;
+      border: 1.5px solid #C9A040;
+      margin-top: 12px;
+    }
+    #download-section { display: none; margin-top: 24px; }
+    #download-section p {
+      font-size: 14px;
+      color: #6B6058;
+      margin-bottom: 16px;
     }
   </style>
   <script>
+    const d = ${pageData};
     const params = new URLSearchParams(window.location.search);
     const groupId = params.get('group');
-    const groupName = params.get('name') ?? 'a group';
-    const deepLink = 'treasury://invite?group=' + groupId + '&name=' + encodeURIComponent(groupName);
+    const deepLink = 'treasury://invite?group=' + groupId + '&name=' + encodeURIComponent(d.groupName);
+
     document.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('group-name').textContent = groupName;
+      document.getElementById('group-name').textContent = d.groupName;
       document.getElementById('open-btn').href = deepLink;
-      setTimeout(() => { window.location.href = deepLink; }, 500);
+
+      if (d.isAndroid) {
+        setupAndroidFallback();
+      } else {
+        // Non-Android: attempt deep link immediately, no fallback needed
+        setTimeout(() => { window.location.href = deepLink; }, 500);
+      }
     });
+
+    function setupAndroidFallback() {
+      let appMayHaveOpened = false;
+
+      // If OS hands off to the app, the page becomes hidden
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) appMayHaveOpened = true;
+      });
+      window.addEventListener('pagehide', () => { appMayHaveOpened = true; });
+      window.addEventListener('blur', () => { appMayHaveOpened = true; });
+
+      // Attempt deep link
+      setTimeout(() => { window.location.href = deepLink; }, 500);
+
+      // If still on page after 2.5s the app is not installed — show download option
+      setTimeout(() => {
+        if (!appMayHaveOpened && !document.hidden && d.apkUrl) {
+          document.getElementById('open-btn').classList.add('btn-secondary');
+          document.getElementById('download-section').style.display = 'block';
+        }
+      }, 2500);
+    }
   </script>
 </head>
 <body>
   <h1>The Treasury</h1>
   <p>You've been invited to join <strong style="color:#F5F0E8" id="group-name"></strong></p>
-  <a id="open-btn" href="#">Open in The Treasury</a>
+  <a id="open-btn" class="btn" href="#">Open in The Treasury</a>
+  <div id="download-section">
+    <p>Don't have the app yet? Download it below.</p>
+    ${apkUrl ? `<a class="btn" href="${apkUrl}" download>Download The Treasury (Android)</a>` : ""}
+  </div>
 </body>
 </html>`;
 
