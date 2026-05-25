@@ -61,6 +61,8 @@ Deno.serve((req) => {
       font-size: 16px;
       width: 100%;
       box-sizing: border-box;
+      cursor: pointer;
+      border: none;
     }
     .btn-secondary {
       background: transparent;
@@ -68,12 +70,38 @@ Deno.serve((req) => {
       border: 1.5px solid #C9A040;
       margin-top: 12px;
     }
-    #download-section { display: none; margin-top: 24px; }
-    #download-section p {
-      font-size: 14px;
-      color: #6B6058;
-      margin-bottom: 16px;
+    #download-section { display: none; margin-top: 24px; width: 100%; }
+    #post-download { display: none; }
+    .steps {
+      text-align: left;
+      margin: 0 0 20px 0;
+      padding: 16px;
+      background: #1A1714;
+      border-radius: 12px;
+      border: 1px solid #2A2420;
     }
+    .step {
+      color: #6B6058;
+      font-size: 14px;
+      padding: 6px 0;
+    }
+    .step.active {
+      color: #C9A040;
+      font-weight: 600;
+      font-size: 15px;
+    }
+    .hint {
+      font-size: 13px;
+      color: #6B6058;
+      margin-top: 0;
+      margin-bottom: 0;
+    }
+    @keyframes pulse-border {
+      0%   { box-shadow: 0 0 0 0 rgba(201,160,64,0.5); }
+      70%  { box-shadow: 0 0 0 10px rgba(201,160,64,0); }
+      100% { box-shadow: 0 0 0 0 rgba(201,160,64,0); }
+    }
+    .btn-glow { animation: pulse-border 1.8s ease-out infinite; }
   </style>
   <script>
     const d = ${pageData};
@@ -96,7 +124,6 @@ Deno.serve((req) => {
     function setupAndroidFallback() {
       let appMayHaveOpened = false;
 
-      // If OS hands off to the app, the page becomes hidden
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) appMayHaveOpened = true;
       });
@@ -109,10 +136,27 @@ Deno.serve((req) => {
       // If still on page after 2.5s the app is not installed — show download option
       setTimeout(() => {
         if (!appMayHaveOpened && !document.hidden && d.apkUrl) {
-          document.getElementById('open-btn').classList.add('btn-secondary');
           document.getElementById('download-section').style.display = 'block';
         }
       }, 2500);
+    }
+
+    async function onDownloadClick() {
+      // Layer 2: write deferred invite payload to clipboard so the app can recover
+      // it on first launch even if user closes this tab
+      try {
+        const ts = Math.floor(Date.now() / 1000);
+        const payload = 'treasury-invite:' + groupId + ':' + encodeURIComponent(d.groupName) + ':' + ts;
+        await navigator.clipboard.writeText(payload);
+      } catch (_) { /* clipboard denied — layer 1 (return-here UX) still covers it */ }
+
+      // Trigger APK download
+      window.location.href = d.apkUrl;
+
+      // Transition to post-download instruction state
+      document.getElementById('pre-download').style.display = 'none';
+      document.getElementById('post-download').style.display = 'block';
+      document.getElementById('open-btn').classList.add('btn-glow');
     }
   </script>
 </head>
@@ -121,8 +165,18 @@ Deno.serve((req) => {
   <p>You've been invited to join <strong style="color:#F5F0E8" id="group-name"></strong></p>
   <a id="open-btn" class="btn" href="#">Open in The Treasury</a>
   <div id="download-section">
-    <p>Don't have the app yet? Download it below.</p>
-    ${apkUrl ? `<a class="btn" href="${apkUrl}" download>Download The Treasury (Android)</a>` : ""}
+    <div id="pre-download">
+      <p style="margin-bottom:16px">Don't have the app yet?</p>
+      ${apkUrl ? `<button class="btn btn-secondary" onclick="onDownloadClick()">Download The Treasury (Android)</button>` : ""}
+    </div>
+    <div id="post-download">
+      <div class="steps">
+        <div class="step">① Install the downloaded APK</div>
+        <div class="step">② Open The Treasury</div>
+        <div class="step active">③ Return here and tap "Open in The Treasury"</div>
+      </div>
+      <p class="hint">The gold button above will open your group directly.</p>
+    </div>
   </div>
 </body>
 </html>`;
