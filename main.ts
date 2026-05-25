@@ -9,6 +9,16 @@ Deno.serve((req) => {
 
   const ua = req.headers.get("user-agent") ?? "";
   const isAndroid = /android/i.test(ua);
+  const isMobile = /android|iphone|ipad|ipod|mobile/i.test(ua);
+
+  // Desktop browsers: redirect straight to the Flutter web app with invite params
+  const webAppUrl = Deno.env.get("WEB_APP_URL") ?? "";
+  if (!isMobile && webAppUrl) {
+    return Response.redirect(
+      `${webAppUrl}?group=${groupId}&name=${encodeURIComponent(groupName)}`,
+      302,
+    );
+  }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const apkUrl = supabaseUrl
