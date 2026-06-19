@@ -86,7 +86,13 @@ Deno.serve(async (req) => {
   const esc = (s: string) =>
     s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  const ogImage = Deno.env.get("OG_IMAGE_URL") ?? `${url.origin}/og-banner.png`;
+  // Per-group cache-buster on the image URL: the banner bytes are identical for
+  // every group, and Telegram/WhatsApp key their preview cache on the image URL
+  // — a shared URL gets deduped and repeats render as a small thumbnail. A
+  // unique ?g=<id> gives each group its own cached (large) card. The banner
+  // route matches on pathname only, so the query is ignored when serving.
+  const ogImageBase = Deno.env.get("OG_IMAGE_URL") ?? `${url.origin}/og-banner.png`;
+  const ogImage = `${ogImageBase}${ogImageBase.includes("?") ? "&" : "?"}g=${encodeURIComponent(groupId)}`;
   const ogTitle = `Join ${groupName} on The Treasury`;
   const ogDesc =
     `You've been invited to split and settle shared expenses in “${groupName}”.`;
@@ -110,7 +116,15 @@ Deno.serve(async (req) => {
     ? `${supabaseUrl}/storage/v1/object/public/releases/treasury-latest.apk`
     : null;
 
-  const pageData = JSON.stringify({ groupName, isAndroid, apkUrl });
+  // groupId is resolved server-side (it is NOT in the URL for short-code links),
+  // so pass it explicitly — the page JS must not read it from the query string.
+  const pageData = JSON.stringify({
+    groupId,
+    groupName,
+    isAndroid,
+    apkUrl,
+    webAppUrl,
+  });
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -149,99 +163,60 @@ Deno.serve(async (req) => {
       cursor: pointer;
       border: none;
     }
-    .btn-secondary {
-      background: transparent;
-      color: #C9A040;
-      border: 1.5px solid #C9A040;
-      margin-top: 12px;
-    }
-    #download-section { display: none; margin-top: 24px; width: 100%; }
-    #post-download { display: none; }
-    .steps {
-      text-align: left;
-      margin: 0 0 20px 0;
-      padding: 16px;
-      background: #1A1714;
-      border-radius: 12px;
-      border: 1px solid #2A2420;
-    }
-    .step {
+    .applink {
+      display: inline-block;
+      margin-top: 18px;
       color: #6B6058;
       font-size: 14px;
-      padding: 6px 0;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      cursor: pointer;
     }
-    .step.active {
-      color: #C9A040;
-      font-weight: 600;
-      font-size: 15px;
-    }
-    .hint {
-      font-size: 13px;
-      color: #6B6058;
-      margin-top: 0;
-      margin-bottom: 0;
-    }
-    @keyframes pulse-border {
-      0%   { box-shadow: 0 0 0 0 rgba(201,160,64,0.5); }
-      70%  { box-shadow: 0 0 0 10px rgba(201,160,64,0); }
-      100% { box-shadow: 0 0 0 0 rgba(201,160,64,0); }
-    }
-    .btn-glow { animation: pulse-border 1.8s ease-out infinite; }
   </style>
   <script>
     const d = ${pageData};
-    const params = new URLSearchParams(window.location.search);
-    const groupId = params.get('group');
-    const deepLink = 'treasury://invite?group=' + groupId + '&name=' + encodeURIComponent(d.groupName);
+    const groupId = d.groupId;
+    const nameEnc = encodeURIComponent(d.groupName);
+
+    const schemeLink = 'treasury://invite?group=' + groupId + '&name=' + nameEnc;
+    const webInvite = d.webAppUrl
+      ? d.webAppUrl + '?group=' + groupId + '&name=' + nameEnc
+      : '';
+
+    // Android: intent:// is the reliable way to launch an installed app from
+    // Chrome. If the app is NOT installed, the browser follows
+    // browser_fallback_url straight to the web app — no dead-end, no Play Store.
+    const androidLink = 'intent://invite?group=' + groupId + '&name=' + nameEnc +
+      '#Intent;scheme=treasury;package=com.meditec.treasury;' +
+      (webInvite ? 'S.browser_fallback_url=' + encodeURIComponent(webInvite) + ';' : '') +
+      'end';
+
+    const openLink = d.isAndroid ? androidLink : schemeLink;
 
     document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('group-name').textContent = d.groupName;
-      document.getElementById('open-btn').href = deepLink;
+      document.getElementById('open-btn').href = openLink;
 
-      if (d.isAndroid) {
-        setupAndroidFallback();
-      } else {
-        // Non-Android: attempt deep link immediately, no fallback needed
-        setTimeout(() => { window.location.href = deepLink; }, 500);
+      // Non-Android (iOS, etc.): try the app scheme; if it doesn't take over,
+      // fall through to the web app so the user can still join in-browser.
+      if (!d.isAndroid) {
+        setTimeout(() => { window.location.href = schemeLink; }, 400);
+        if (webInvite) {
+          setTimeout(() => { window.location.href = webInvite; }, 1600);
+        }
       }
     });
 
-    function setupAndroidFallback() {
-      let appMayHaveOpened = false;
-
-      document.addEventListener('visibilitychange', () => {
-        if (document.hidden) appMayHaveOpened = true;
-      });
-      window.addEventListener('pagehide', () => { appMayHaveOpened = true; });
-      window.addEventListener('blur', () => { appMayHaveOpened = true; });
-
-      // Attempt deep link
-      setTimeout(() => { window.location.href = deepLink; }, 500);
-
-      // If still on page after 2.5s the app is not installed — show download option
-      setTimeout(() => {
-        if (!appMayHaveOpened && !document.hidden && d.apkUrl) {
-          document.getElementById('download-section').style.display = 'block';
-        }
-      }, 2500);
-    }
-
-    async function onDownloadClick() {
-      // Layer 2: write deferred invite payload to clipboard so the app can recover
-      // it on first launch even if user closes this tab
+    // Optional native install: stash the invite on the clipboard so the freshly
+    // installed app can recover it on first launch, then download the APK.
+    async function onGetApp() {
       try {
         const ts = Math.floor(Date.now() / 1000);
-        const payload = 'treasury-invite:' + groupId + ':' + encodeURIComponent(d.groupName) + ':' + ts;
-        await navigator.clipboard.writeText(payload);
-      } catch (_) { /* clipboard denied — layer 1 (return-here UX) still covers it */ }
-
-      // Trigger APK download
+        await navigator.clipboard.writeText(
+          'treasury-invite:' + groupId + ':' + nameEnc + ':' + ts,
+        );
+      } catch (_) { /* clipboard denied — not critical */ }
       window.location.href = d.apkUrl;
-
-      // Transition to post-download instruction state
-      document.getElementById('pre-download').style.display = 'none';
-      document.getElementById('post-download').style.display = 'block';
-      document.getElementById('open-btn').classList.add('btn-glow');
     }
   </script>
 </head>
@@ -249,20 +224,7 @@ Deno.serve(async (req) => {
   <h1>The Treasury</h1>
   <p>You've been invited to join <strong style="color:#F5F0E8" id="group-name"></strong></p>
   <a id="open-btn" class="btn" href="#">Open in The Treasury</a>
-  <div id="download-section">
-    <div id="pre-download">
-      <p style="margin-bottom:16px">Don't have the app yet?</p>
-      ${apkUrl ? `<button class="btn btn-secondary" onclick="onDownloadClick()">Download The Treasury (Android)</button>` : ""}
-    </div>
-    <div id="post-download">
-      <div class="steps">
-        <div class="step">① Install the downloaded APK</div>
-        <div class="step">② Open The Treasury</div>
-        <div class="step active">③ Return here and tap "Open in The Treasury"</div>
-      </div>
-      <p class="hint">The gold button above will open your group directly.</p>
-    </div>
-  </div>
+  ${isAndroid && apkUrl ? `<a class="applink" onclick="onGetApp()">Get the Android app</a>` : ""}
 </body>
 </html>`;
 
