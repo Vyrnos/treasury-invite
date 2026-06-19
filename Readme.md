@@ -1,9 +1,42 @@
-# Deno Examples: Hello, World!
+# treasury-invite
 
-Simply serving a single file over HTTP
+Deno Deploy service behind `treasury-invite.meditec.deno.net` that backs The
+Treasury's invite / deep links.
 
-## Get your own copy to explore
+Given an invite URL like:
 
-You can clone this example into a repo of your own, and use it to set up a new application hosted on Deno Deploy in a few clicks
+```
+https://treasury-invite.meditec.deno.net?group=<groupId>&name=<groupName>
+```
 
-[![Deploy on Deno](https://deno.com/button)](https://app.deno.com/new?clone=https://github.com/denoland/examples&path=hello-world)
+it serves a landing page that:
+
+- **Link-preview crawlers** (WhatsApp, Facebook, Telegram, Slack, Discord, …)
+  receive HTML with Open Graph / Twitter card tags for a rich preview. The card
+  image is served from this same service at `/og-banner.png`.
+- **Desktop browsers** (real users) are 302-redirected to the Flutter web app
+  (`WEB_APP_URL`) with the invite params.
+- **Mobile browsers** get a page that attempts the `treasury://invite` deep
+  link, with an Android APK-download fallback and a deferred-invite clipboard
+  handoff.
+
+## Environment variables
+
+| Var             | Purpose                                                              |
+| --------------- | ------------------------------------------------------------------- |
+| `WEB_APP_URL`   | Flutter web app origin for the desktop redirect.                    |
+| `SUPABASE_URL`  | Used to build the public APK download URL (Android fallback).        |
+| `OG_IMAGE_URL`  | Optional. Overrides the default self-hosted `/og-banner.png` image.  |
+
+## Local development
+
+```sh
+deno task dev    # watch mode
+deno task start  # one-shot
+```
+
+Listens on `http://localhost:8000`. Test the crawler path with:
+
+```sh
+curl -A "WhatsApp/2" "http://localhost:8000/?group=abc&name=Ski%20Trip"
+```

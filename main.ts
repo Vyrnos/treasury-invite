@@ -1,5 +1,20 @@
-Deno.serve((req) => {
+Deno.serve(async (req) => {
   const url = new URL(req.url);
+
+  // Open Graph share image, served from this same service so the invite link is
+  // self-contained (no dependency on the Flutter web app being deployed). The
+  // module-relative fetch works both locally (file://) and on Deno Deploy
+  // (https module URL).
+  if (url.pathname === "/og-banner.png") {
+    const asset = await fetch(new URL("./og-banner.png", import.meta.url));
+    return new Response(asset.body, {
+      headers: {
+        "content-type": "image/png",
+        "cache-control": "public, max-age=86400",
+      },
+    });
+  }
+
   const groupId = url.searchParams.get("group");
   const groupName = url.searchParams.get("name") ?? "a group";
 
@@ -10,15 +25,46 @@ Deno.serve((req) => {
   const ua = req.headers.get("user-agent") ?? "";
   const isAndroid = /android/i.test(ua);
   const isMobile = /android|iphone|ipad|ipod|mobile/i.test(ua);
+  // Link-preview crawlers (WhatsApp, Facebook, Telegram, Twitter, Slack,
+  // Discord, etc.) are not "mobile" and must NOT be redirected — they read the
+  // Open Graph tags below to build the share card and do not run JavaScript.
+  const isCrawler =
+    /bot|crawl|spider|facebookexternalhit|whatsapp|telegram|twitterbot|slackbot|discordbot|linkedinbot|embedly|quora link preview|pinterest|vkshare|redditbot|skypeuripreview|google-?bot|bingbot|applebot/i
+      .test(ua);
 
-  // Desktop browsers: redirect straight to the Flutter web app with invite params
-  const webAppUrl = Deno.env.get("WEB_APP_URL") ?? "";
-  if (!isMobile && webAppUrl) {
+  // Desktop browsers (real users, not crawlers): redirect straight to the
+  // Flutter web app with invite params.
+  const webAppUrl = (Deno.env.get("WEB_APP_URL") ?? "").replace(/\/+$/, "");
+  if (!isMobile && !isCrawler && webAppUrl) {
     return Response.redirect(
       `${webAppUrl}?group=${groupId}&name=${encodeURIComponent(groupName)}`,
       302,
     );
   }
+
+  // Open Graph / Twitter card metadata for rich link previews (WhatsApp et al).
+  // Attribute values are user-controlled (groupName), so HTML-escape them.
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const ogImage = Deno.env.get("OG_IMAGE_URL") ?? `${url.origin}/og-banner.png`;
+  const ogTitle = `Join ${groupName} on The Treasury`;
+  const ogDesc =
+    `You've been invited to split and settle shared expenses in “${groupName}”.`;
+  const ogMeta = `
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="The Treasury">
+  <meta property="og:title" content="${esc(ogTitle)}">
+  <meta property="og:description" content="${esc(ogDesc)}">
+  <meta property="og:url" content="${esc(url.href)}">
+  <meta property="og:image" content="${esc(ogImage)}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="The Treasury">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="${esc(ogImage)}">
+  <meta name="twitter:title" content="${esc(ogTitle)}">
+  <meta name="twitter:description" content="${esc(ogDesc)}">`;
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const apkUrl = supabaseUrl
@@ -32,7 +78,7 @@ Deno.serve((req) => {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>The Treasury — You've been invited</title>
+  <title>The Treasury — You've been invited</title>${ogMeta}
   <style>
     body {
       background: #0F0D0B;
