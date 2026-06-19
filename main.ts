@@ -1,3 +1,29 @@
+// Resolve a short invite code to its group via the Supabase RPC. Returns
+// { group_id, name } or null (unknown/archived code, or env not configured).
+async function resolveInvite(
+  code: string,
+): Promise<{ group_id: string; name: string } | null> {
+  const base = Deno.env.get("SUPABASE_URL");
+  const key = Deno.env.get("SUPABASE_ANON_KEY");
+  if (!base || !key) return null;
+  try {
+    const r = await fetch(`${base}/rest/v1/rpc/get_invite_info`, {
+      method: "POST",
+      headers: {
+        "apikey": key,
+        "authorization": `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ p_code: code }),
+    });
+    if (!r.ok) return null;
+    const data = await r.json();
+    return data && data.group_id ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
 
@@ -15,12 +41,25 @@ Deno.serve(async (req) => {
     });
   }
 
-  const groupId = url.searchParams.get("group");
-  const groupName = url.searchParams.get("name") ?? "a group";
+  // Two link formats are supported:
+  //   New (pretty):  /<code>           — 8-char base62, resolved via Supabase
+  //   Legacy:        ?group=<uuid>&name=<name>  — still live in shared chats
+  let groupId = url.searchParams.get("group");
+  let groupName = url.searchParams.get("name") ?? undefined;
+
+  const code = url.pathname.replace(/^\/+|\/+$/g, "");
+  if (!groupId && /^[A-Za-z0-9]{8}$/.test(code)) {
+    const info = await resolveInvite(code);
+    if (info) {
+      groupId = info.group_id;
+      groupName = info.name;
+    }
+  }
 
   if (!groupId) {
-    return new Response("Invalid invite link", { status: 400 });
+    return new Response("Invalid or expired invite link", { status: 404 });
   }
+  groupName = groupName ?? "a group";
 
   const ua = req.headers.get("user-agent") ?? "";
   const isAndroid = /android/i.test(ua);

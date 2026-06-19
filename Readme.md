@@ -22,11 +22,15 @@ it serves a landing page that:
 
 ## Environment variables
 
-| Var             | Purpose                                                              |
-| --------------- | ------------------------------------------------------------------- |
-| `WEB_APP_URL`   | Flutter web app origin for the desktop redirect.                    |
-| `SUPABASE_URL`  | Used to build the public APK download URL (Android fallback).        |
-| `OG_IMAGE_URL`  | Optional. Overrides the default self-hosted `/og-banner.png` image.  |
+| Var                  | Purpose                                                          |
+| -------------------- | ---------------------------------------------------------------- |
+| `WEB_APP_URL`        | Flutter web app origin for the desktop redirect.                 |
+| `SUPABASE_URL`       | APK download URL + short-code resolution RPC.                    |
+| `SUPABASE_ANON_KEY`  | Auth for the `get_invite_info` RPC (resolves `/<code>` links).   |
+| `OG_IMAGE_URL`       | Optional. Overrides the default self-hosted `/og-banner.png`.    |
+
+Link formats accepted: `/<code>` (8-char base62, resolved via Supabase) and the
+legacy `?group=<uuid>&name=<name>` (still live in already-shared chats).
 
 ## Local development
 
