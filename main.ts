@@ -27,6 +27,29 @@ async function resolveInvite(
 Deno.serve(async (req) => {
   const url = new URL(req.url);
 
+  // Android App Links verification: the OS fetches this file when installing/updating
+  // the app to confirm that this domain may open com.meditec.treasury. Requires
+  // ANDROID_SHA256_FINGERPRINT env var — get it from:
+  //   keytool -list -v -keystore release.jks -alias <alias>
+  // or from the Play Console > Setup > App integrity > App signing key certificate.
+  if (url.pathname === "/.well-known/assetlinks.json") {
+    const fingerprint = Deno.env.get("ANDROID_SHA256_FINGERPRINT");
+    const assetlinks = [{
+      relation: ["delegate_permission/common.handle_all_urls"],
+      target: {
+        namespace: "android_app",
+        package_name: "com.meditec.treasury",
+        sha256_cert_fingerprints: fingerprint ? [fingerprint] : [],
+      },
+    }];
+    return new Response(JSON.stringify(assetlinks), {
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "public, max-age=3600",
+      },
+    });
+  }
+
   // Open Graph share image, served from this same service so the invite link is
   // self-contained (no dependency on the Flutter web app being deployed). The
   // module-relative fetch works both locally (file://) and on Deno Deploy
@@ -197,12 +220,16 @@ Deno.serve(async (req) => {
       document.getElementById('group-name').textContent = d.groupName;
       document.getElementById('open-btn').href = openLink;
 
-      // Non-Android (iOS, etc.): try the app scheme; if it doesn't take over,
-      // fall through to the web app so the user can still join in-browser.
+      // Non-Android (iOS, etc.): try the app scheme immediately; if it opens,
+      // the page goes to background (document.hidden = true). Only fall through
+      // to the web app if the page is still visible after 1.5s — i.e. the app
+      // was NOT installed / didn't respond.
       if (!d.isAndroid) {
-        setTimeout(() => { window.location.href = schemeLink; }, 400);
+        window.location.href = schemeLink;
         if (webInvite) {
-          setTimeout(() => { window.location.href = webInvite; }, 1600);
+          setTimeout(() => {
+            if (!document.hidden) window.location.href = webInvite;
+          }, 1500);
         }
       }
     });
