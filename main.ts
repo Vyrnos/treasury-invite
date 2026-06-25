@@ -85,8 +85,13 @@ Deno.serve(async (req) => {
   groupName = groupName ?? "a group";
 
   const ua = req.headers.get("user-agent") ?? "";
-  const isAndroid = /android/i.test(ua);
-  const isMobile = /android|iphone|ipad|ipod|mobile/i.test(ua);
+  // Sec-CH-UA-Mobile is a Client Hints header sent by Chromium-based browsers
+  // (Chrome, Brave, Edge) and is ?1 on a mobile device even when the browser
+  // is set to "desktop mode" — making it more reliable than the UA string alone.
+  const chMobile = req.headers.get("sec-ch-ua-mobile");
+  const chPlatform = (req.headers.get("sec-ch-ua-platform") ?? "").toLowerCase();
+  const isAndroid = /android/i.test(ua) || chPlatform === '"android"';
+  const isMobile = /android|iphone|ipad|ipod|mobile/i.test(ua) || chMobile === "?1";
   // Link-preview crawlers (WhatsApp, Facebook, Telegram, Twitter, Slack,
   // Discord, etc.) are not "mobile" and must NOT be redirected — they read the
   // Open Graph tags below to build the share card and do not run JavaScript.
