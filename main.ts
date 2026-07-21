@@ -121,19 +121,19 @@ Deno.serve(async (req) => {
   // route matches on pathname only, so the query is ignored when serving.
   const ogImageBase = Deno.env.get("OG_IMAGE_URL") ?? `${url.origin}/og-banner.png`;
   const ogImage = `${ogImageBase}${ogImageBase.includes("?") ? "&" : "?"}g=${encodeURIComponent(groupId)}`;
-  const ogTitle = `Join ${groupName} on The Treasury`;
+  const ogTitle = `Join ${groupName} on Zaldo`;
   const ogDesc =
     `You've been invited to split and settle shared expenses in “${groupName}”.`;
   const ogMeta = `
   <meta property="og:type" content="website">
-  <meta property="og:site_name" content="The Treasury">
+  <meta property="og:site_name" content="Zaldo">
   <meta property="og:title" content="${esc(ogTitle)}">
   <meta property="og:description" content="${esc(ogDesc)}">
   <meta property="og:url" content="${esc(url.href)}">
   <meta property="og:image" content="${esc(ogImage)}">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="The Treasury">
+  <meta property="og:image:alt" content="Zaldo">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="${esc(ogImage)}">
   <meta name="twitter:title" content="${esc(ogTitle)}">
@@ -159,7 +159,7 @@ Deno.serve(async (req) => {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>The Treasury — You've been invited</title>${ogMeta}
+  <title>Zaldo — You've been invited</title>${ogMeta}
   <style>
     body {
       background: #0F0D0B;
@@ -253,9 +253,9 @@ Deno.serve(async (req) => {
   </script>
 </head>
 <body>
-  <h1>The Treasury</h1>
+  <h1>Zaldo</h1>
   <p>You've been invited to join <strong style="color:#F5F0E8" id="group-name"></strong></p>
-  <a id="open-btn" class="btn" href="#">Open in The Treasury</a>
+  <a id="open-btn" class="btn" href="#">Open in Zaldo</a>
   ${isAndroid && apkUrl ? `<a class="applink" onclick="onGetApp()">Get the Android app</a>` : ""}
 </body>
 </html>`;

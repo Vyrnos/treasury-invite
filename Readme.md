@@ -1,7 +1,7 @@
 # treasury-invite
 
-Deno Deploy service behind `treasury-invite.meditec.deno.net` that backs The
-Treasury's invite / deep links.
+Deno Deploy service behind `treasury-invite.meditec.deno.net` that backs
+Zaldo's invite / deep links.
 
 Given an invite URL like:
 
