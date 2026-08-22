@@ -67,8 +67,17 @@ Deno.serve(async (req) => {
   // Two link formats are supported:
   //   New (pretty):  /<code>           — 8-char base62, resolved via Supabase
   //   Legacy:        ?group=<uuid>&name=<name>  — still live in shared chats
-  let groupId = url.searchParams.get("group");
-  let groupName = url.searchParams.get("name") ?? undefined;
+  //
+  // Both legacy params are attacker-controlled: this endpoint is unauthenticated
+  // and anyone can craft a link to it. groupId must therefore be shape-checked
+  // as a UUID (it is interpolated into an intent:// URL and a treasury:// scheme
+  // link), and groupName is length-capped so a link cannot carry a payload-sized
+  // string. Escaping still does the real work below — this is the outer bound.
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const rawGroup = url.searchParams.get("group");
+  let groupId = rawGroup && UUID_RE.test(rawGroup) ? rawGroup : null;
+  let groupName = url.searchParams.get("name")?.slice(0, 80) ?? undefined;
 
   const code = url.pathname.replace(/^\/+|\/+$/g, "");
   if (!groupId && /^[A-Za-z0-9]{8}$/.test(code)) {
@@ -146,7 +155,25 @@ Deno.serve(async (req) => {
 
   // groupId is resolved server-side (it is NOT in the URL for short-code links),
   // so pass it explicitly — the page JS must not read it from the query string.
-  const pageData = JSON.stringify({
+  //
+  // JSON.stringify is NOT sufficient on its own here. It escapes quotes and
+  // backslashes, but leaves "<" and "/" alone — so a groupName containing
+  // "</script>" closes the block early and everything after it is parsed as
+  // HTML. That was live: ?group=<uuid>&name=</script><img src=x onerror=...>
+  // executed attacker script on this origin, which is the origin that hands
+  // visitors an APK to install. Escaping the three characters that can end a
+  // script block (plus the two line terminators JSON allows raw but JS does
+  // not) makes the payload inert while keeping it valid JSON.
+  const jsonForScript = (value: unknown) =>
+    JSON.stringify(value)
+      .replace(/</g, "\\u003c")
+      .replace(/>/g, "\\u003e")
+      .replace(/&/g, "\\u0026")
+      .replace(new RegExp("[\\u2028\\u2029]", "g"), (c: string) =>
+        c.charCodeAt(0) === 0x2028 ? "\\u2028" : "\\u2029"
+      );
+
+  const pageData = jsonForScript({
     groupId,
     groupName,
     isAndroid,
@@ -154,13 +181,18 @@ Deno.serve(async (req) => {
     webAppUrl,
   });
 
+  // Per-response nonce so the CSP below can allow exactly this page's own
+  // script and style block and nothing else — no 'unsafe-inline', which would
+  // hand any future injection the same privileges as the real script.
+  const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Zaldo — You've been invited</title>${ogMeta}
-  <style>
+  <style nonce="${nonce}">
     body {
       background: #0F0D0B;
       color: #F5F0E8;
@@ -201,7 +233,7 @@ Deno.serve(async (req) => {
       cursor: pointer;
     }
   </style>
-  <script>
+  <script nonce="${nonce}">
     const d = ${pageData};
     const groupId = d.groupId;
     const nameEnc = encodeURIComponent(d.groupName);
@@ -224,6 +256,11 @@ Deno.serve(async (req) => {
     document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('group-name').textContent = d.groupName;
       document.getElementById('open-btn').href = openLink;
+
+      // Bound here rather than as an inline onclick= attribute: the CSP has no
+      // 'unsafe-inline', which is what makes the nonce meaningful.
+      const getApp = document.getElementById('get-app');
+      if (getApp) getApp.addEventListener('click', onGetApp);
 
       // Non-Android (iOS, etc.): try the app scheme immediately; if it opens,
       // the page goes to background (document.hidden = true). Only fall through
@@ -256,11 +293,33 @@ Deno.serve(async (req) => {
   <h1>Zaldo</h1>
   <p>You've been invited to join <strong style="color:#F5F0E8" id="group-name"></strong></p>
   <a id="open-btn" class="btn" href="#">Open in Zaldo</a>
-  ${isAndroid && apkUrl ? `<a class="applink" onclick="onGetApp()">Get the Android app</a>` : ""}
+  ${isAndroid && apkUrl ? `<a class="applink" id="get-app">Get the Android app</a>` : ""}
 </body>
 </html>`;
 
   return new Response(html, {
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      // default-src 'none' means anything not named below is refused outright.
+      // The page loads no subresources: its script and style are inline (and
+      // nonced), and the OG banner is fetched by crawlers from the meta tags,
+      // never by this document. img-src stays 'self' for the favicon request
+      // browsers make regardless.
+      "Content-Security-Policy": [
+        "default-src 'none'",
+        `script-src 'nonce-${nonce}'`,
+        `style-src 'nonce-${nonce}'`,
+        "img-src 'self'",
+        "base-uri 'none'",
+        "form-action 'none'",
+        "frame-ancestors 'none'",
+      ].join("; "),
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+      // The invite page is per-link and carries a group name; keep it out of
+      // shared caches.
+      "Cache-Control": "no-store",
+    },
   });
 });

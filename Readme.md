@@ -1,12 +1,13 @@
 # treasury-invite
 
-Deno Deploy service behind `treasury-invite.meditec.deno.net` that backs
-Zaldo's invite / deep links.
+Deno Deploy service behind `invite.getzaldo.com` that backs Zaldo's invite /
+deep links. Also still reachable at the legacy `treasury-invite.meditec.deno.net`
+host, kept alive for invite links shared before the getzaldo.com migration.
 
 Given an invite URL like:
 
 ```
-https://treasury-invite.meditec.deno.net?group=<groupId>&name=<groupName>
+https://invite.getzaldo.com?group=<groupId>&name=<groupName>
 ```
 
 it serves a landing page that:
