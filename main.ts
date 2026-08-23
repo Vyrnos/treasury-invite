@@ -24,6 +24,24 @@ async function resolveInvite(
   }
 }
 
+// Origin of the Flutter web app that invite links hand visitors off to.
+//
+// Hard-coded on purpose. This used to be the WEB_APP_URL env var set in the
+// Deno Deploy dashboard, and during the getzaldo.com migration it was left
+// pointing at a stale Cloudflare Pages preview host
+// (https://main.treasury-9rg.pages.dev). That host now answers with a 301 to
+// getzaldo.com which *drops the query string* — so ?group=<id>&name=<name>
+// never reached the app and every visitor landed on a bare sign-in page with
+// no invite to accept. A constant in version control cannot drift out of sync
+// with SupabaseService.inviteHost on the Flutter side the way a dashboard
+// setting did. Delete the WEB_APP_URL env var from Deno Deploy; it is ignored.
+const WEB_APP_URL = "https://getzaldo.com";
+
+// The web app reads ?group=&name= off its own URL (see _handleUri in
+// lib/main.dart) — keep this the single place that shape is built.
+const webInviteUrl = (groupId: string, groupName: string) =>
+  `${WEB_APP_URL}?group=${groupId}&name=${encodeURIComponent(groupName)}`;
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
 
@@ -94,28 +112,31 @@ Deno.serve(async (req) => {
   groupName = groupName ?? "a group";
 
   const ua = req.headers.get("user-agent") ?? "";
-  // Sec-CH-UA-Mobile is a Client Hints header sent by Chromium-based browsers
-  // (Chrome, Brave, Edge) and is ?1 on a mobile device even when the browser
-  // is set to "desktop mode" — making it more reliable than the UA string alone.
-  const chMobile = req.headers.get("sec-ch-ua-mobile");
+  // Sec-CH-UA-Platform is a Client Hints header sent by Chromium-based browsers
+  // (Chrome, Brave, Edge) and still reports "Android" when the browser is set
+  // to "desktop mode" — more reliable than the UA string alone.
   const chPlatform = (req.headers.get("sec-ch-ua-platform") ?? "").toLowerCase();
   const isAndroid = /android/i.test(ua) || chPlatform === '"android"';
-  const isMobile = /android|iphone|ipad|ipod|mobile/i.test(ua) || chMobile === "?1";
   // Link-preview crawlers (WhatsApp, Facebook, Telegram, Twitter, Slack,
-  // Discord, etc.) are not "mobile" and must NOT be redirected — they read the
-  // Open Graph tags below to build the share card and do not run JavaScript.
+  // Discord, etc.) must NOT be redirected — they read the Open Graph tags below
+  // to build the share card and do not run JavaScript.
   const isCrawler =
     /bot|crawl|spider|facebookexternalhit|whatsapp|telegram|twitterbot|slackbot|discordbot|linkedinbot|embedly|quora link preview|pinterest|vkshare|redditbot|skypeuripreview|google-?bot|bingbot|applebot/i
       .test(ua);
 
-  // Desktop browsers (real users, not crawlers): redirect straight to the
-  // Flutter web app with invite params.
-  const webAppUrl = (Deno.env.get("WEB_APP_URL") ?? "").replace(/\/+$/, "");
-  if (!isMobile && !isCrawler && webAppUrl) {
-    return Response.redirect(
-      `${webAppUrl}?group=${groupId}&name=${encodeURIComponent(groupName)}`,
-      302,
-    );
+  // Everyone who is not on Android and is not a crawler — desktop *and iPhone*
+  // — goes straight to the Flutter web app.
+  //
+  // iPhones used to get the landing page below, which immediately assigned
+  // location.href = "treasury://invite?…" and only fell through to the web app
+  // 1.5 s later if the page was still visible. There is no iOS build of this
+  // app: ios/Runner/Info.plist registers no CFBundleURLTypes, so nothing on the
+  // device claims the treasury:// scheme. Safari answered it with a modal
+  // "Cannot Open Page — the address is invalid" that the visitor had to dismiss
+  // and that swallowed the timed fallback. Skipping the scheme entirely is the
+  // whole fix for iPhone: one redirect, no dialog, no wait.
+  if (!isAndroid && !isCrawler) {
+    return Response.redirect(webInviteUrl(groupId, groupName), 302);
   }
 
   // Open Graph / Twitter card metadata for rich link previews (WhatsApp et al).
@@ -178,7 +199,7 @@ Deno.serve(async (req) => {
     groupName,
     isAndroid,
     apkUrl,
-    webAppUrl,
+    webInvite: webInviteUrl(groupId, groupName),
   });
 
   // Per-response nonce so the CSP below can allow exactly this page's own
@@ -238,20 +259,19 @@ Deno.serve(async (req) => {
     const groupId = d.groupId;
     const nameEnc = encodeURIComponent(d.groupName);
 
-    const schemeLink = 'treasury://invite?group=' + groupId + '&name=' + nameEnc;
-    const webInvite = d.webAppUrl
-      ? d.webAppUrl + '?group=' + groupId + '&name=' + nameEnc
-      : '';
-
     // Android: intent:// is the reliable way to launch an installed app from
     // Chrome. If the app is NOT installed, the browser follows
     // browser_fallback_url straight to the web app — no dead-end, no Play Store.
     const androidLink = 'intent://invite?group=' + groupId + '&name=' + nameEnc +
       '#Intent;scheme=treasury;package=com.meditec.treasury;' +
-      (webInvite ? 'S.browser_fallback_url=' + encodeURIComponent(webInvite) + ';' : '') +
+      'S.browser_fallback_url=' + encodeURIComponent(d.webInvite) + ';' +
       'end';
 
-    const openLink = d.isAndroid ? androidLink : schemeLink;
+    // Only Android browsers and link-preview crawlers are served this page —
+    // every other visitor was already 302'd to the web app, so the non-Android
+    // href here is a plain safe default (crawlers do not run JS anyway). No
+    // treasury:// attempt: nothing outside Android registers that scheme.
+    const openLink = d.isAndroid ? androidLink : d.webInvite;
 
     document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('group-name').textContent = d.groupName;
@@ -261,19 +281,6 @@ Deno.serve(async (req) => {
       // 'unsafe-inline', which is what makes the nonce meaningful.
       const getApp = document.getElementById('get-app');
       if (getApp) getApp.addEventListener('click', onGetApp);
-
-      // Non-Android (iOS, etc.): try the app scheme immediately; if it opens,
-      // the page goes to background (document.hidden = true). Only fall through
-      // to the web app if the page is still visible after 1.5s — i.e. the app
-      // was NOT installed / didn't respond.
-      if (!d.isAndroid) {
-        window.location.href = schemeLink;
-        if (webInvite) {
-          setTimeout(() => {
-            if (!document.hidden) window.location.href = webInvite;
-          }, 1500);
-        }
-      }
     });
 
     // Optional native install: stash the invite on the clipboard so the freshly
